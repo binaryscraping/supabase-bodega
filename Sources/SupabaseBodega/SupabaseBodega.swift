@@ -1,22 +1,17 @@
 import Bodega
 import Foundation
+import OSLog
 
 public actor SupabaseStorageEngine: StorageEngine {
-  private struct StoredValue: Codable {
+  struct StoredValue: Codable {
     let key: String
     let data: Data
   }
 
-  public enum Error: LocalizedError {
-    case unaccetableStatusCode(_ code: Int)
-
-    public var errorDescription: String? {
-      switch self {
-      case let .unaccetableStatusCode(code):
-        return "Unaccetable status code: \(code)"
-      }
-    }
-  }
+  let logger = Logger(
+    subsystem: "co.binarsycraping.supabase-bodega",
+    category: "\(SupabaseStorageEngine.self)"
+  )
 
   let session: URLSession
   let url: URL
@@ -24,7 +19,7 @@ public actor SupabaseStorageEngine: StorageEngine {
   let encoder: JSONEncoder
   let decoder: JSONDecoder
 
-  public init(url: URL, table: String, apiKey: String) {
+  public init(url: URL, apiKey: String, table: String) {
     let configuration = URLSessionConfiguration.default
     configuration.httpAdditionalHeaders = [
       "apikey": apiKey,
@@ -44,7 +39,17 @@ public actor SupabaseStorageEngine: StorageEngine {
     dateFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
     decoder.dateDecodingStrategy = .custom { decoder in
       let string = try decoder.singleValueContainer().decode(String.self)
-      return dateFormatter.date(from: string)!
+
+      guard let date = dateFormatter.date(from: string) else {
+        throw DecodingError.dataCorrupted(
+          .init(
+            codingPath: decoder.codingPath,
+            debugDescription: "Unexpected date format found: \(string)"
+          )
+        )
+      }
+
+      return date
     }
 
     self.encoder = encoder
@@ -68,7 +73,15 @@ public actor SupabaseStorageEngine: StorageEngine {
       ]
     )
 
-    try await send(request)
+    do {
+      try await send(request)
+    } catch {
+      logger
+        .error(
+          "Error writing data and keys for keys '\(body.map(\.key))', error: \(String(describing: error))"
+        )
+      throw error
+    }
   }
 
   public func read(key: Bodega.CacheKey) async -> Data? {
@@ -88,7 +101,7 @@ public actor SupabaseStorageEngine: StorageEngine {
       let container = try decoder.decode([Container].self, from: data)
       return container.first?.data
     } catch {
-      print(error)
+      logger.error("Error reading data for key '\(key.value)', error: \(String(describing: error))")
       return nil
     }
   }
@@ -110,7 +123,10 @@ public actor SupabaseStorageEngine: StorageEngine {
       let container = try decoder.decode([Container].self, from: data)
       return container.map(\.data)
     } catch {
-      print(error)
+      logger
+        .error(
+          "Error reading data for keys '\(keys.map(\.value))', error: \(String(describing: error))"
+        )
       return []
     }
   }
@@ -134,7 +150,10 @@ public actor SupabaseStorageEngine: StorageEngine {
         (CacheKey(verbatim: $0.key), $0.data)
       }
     } catch {
-      print(error)
+      logger
+        .error(
+          "Error reading data and keys for keys '\(keys.map(\.value))', error: \(String(describing: error))"
+        )
       return []
     }
   }
@@ -154,7 +173,7 @@ public actor SupabaseStorageEngine: StorageEngine {
       let container = try decoder.decode([Container].self, from: data)
       return container.map(\.data)
     } catch {
-      print(error)
+      logger.error("Error reading all data, error: \(String(describing: error))")
       return []
     }
   }
@@ -175,7 +194,7 @@ public actor SupabaseStorageEngine: StorageEngine {
         (CacheKey(verbatim: $0.key), $0.data)
       }
     } catch {
-      print(error)
+      logger.error("Error reading all data and keys, error: \(String(describing: error))")
       return []
     }
   }
@@ -188,7 +207,12 @@ public actor SupabaseStorageEngine: StorageEngine {
       ]
     )
 
-    try await send(request)
+    do {
+      try await send(request)
+    } catch {
+      logger.error("Error removing key '\(key.value)', error: \(String(describing: error))")
+      throw error
+    }
   }
 
   public func remove(keys: [CacheKey]) async throws {
@@ -199,7 +223,13 @@ public actor SupabaseStorageEngine: StorageEngine {
       ]
     )
 
-    try await send(request)
+    do {
+      try await send(request)
+    } catch {
+      logger
+        .error("Error removing keys '\(keys.map(\.value))', error: \(String(describing: error))")
+      throw error
+    }
   }
 
   public func removeAllData() async throws {
@@ -209,7 +239,12 @@ public actor SupabaseStorageEngine: StorageEngine {
         URLQueryItem(name: "key", value: "neq.\(UUID().uuidString)"),
       ]
     )
-    try await send(request)
+    do {
+      try await send(request)
+    } catch {
+      logger.error("Error removing all data, error: \(String(describing: error))")
+      throw error
+    }
   }
 
   public func keyExists(_ key: Bodega.CacheKey) async -> Bool {
@@ -226,13 +261,20 @@ public actor SupabaseStorageEngine: StorageEngine {
     do {
       let (_, response) = try await send(request)
       guard let contentRange = response.value(forHTTPHeaderField: "Content-Range") else {
+        logger.error("Missing 'Content-Range' headers from response.")
         throw URLError(.badServerResponse)
       }
 
-      let count = contentRange.split(separator: "/").last.flatMap { Int($0) } ?? 0
+      let count = contentRange.split(separator: "/").last.flatMap { Int($0) }
+      guard let count else {
+        logger.error("Wrong format for 'Content-Range' found: \(contentRange)")
+        return false
+      }
+
       return count > 0
     } catch {
-      print(error)
+      logger
+        .error("Error checking if key '\(key.value)' exists, error: \(String(describing: error))")
       return false
     }
   }
@@ -248,13 +290,19 @@ public actor SupabaseStorageEngine: StorageEngine {
     do {
       let (_, response) = try await send(request)
       guard let contentRange = response.value(forHTTPHeaderField: "Content-Range") else {
+        logger.error("Missing 'Content-Range' headers from response.")
         throw URLError(.badServerResponse)
       }
 
-      let count = contentRange.split(separator: "/").last
-      return count.flatMap { Int($0) } ?? 0
+      let count = contentRange.split(separator: "/").last.flatMap { Int($0) }
+      guard let count else {
+        logger.error("Wrong format for 'Content-Range' found: \(contentRange)")
+        return 0
+      }
+
+      return count
     } catch {
-      print(error)
+      logger.error("Error fetching key count, error: \(String(describing: error))")
       return 0
     }
   }
@@ -277,6 +325,7 @@ public actor SupabaseStorageEngine: StorageEngine {
 
       return keys.map { CacheKey(verbatim: $0.key) }
     } catch {
+      logger.error("Error fetching all keys, error: \(String(describing: error))")
       return []
     }
   }
@@ -298,7 +347,10 @@ public actor SupabaseStorageEngine: StorageEngine {
       let values = try decoder.decode([Container].self, from: data)
       return values.first?.createdAt
     } catch {
-      print(error)
+      logger
+        .error(
+          "Error fetching 'created_at' from key '\(key.value)', error: \(String(describing: error))"
+        )
       return nil
     }
   }
@@ -320,7 +372,10 @@ public actor SupabaseStorageEngine: StorageEngine {
       let values = try decoder.decode([Container].self, from: data)
       return values.first?.updatedAt
     } catch {
-      print(error)
+      logger
+        .error(
+          "Error fetching 'updated_at' from key '\(key.value)', error: \(String(describing: error))"
+        )
       return nil
     }
   }
@@ -333,38 +388,13 @@ public actor SupabaseStorageEngine: StorageEngine {
   }
 
   private func validate(_ response: URLResponse) throws -> HTTPURLResponse {
-    guard let httpResponse = response as? HTTPURLResponse else {
+    guard
+      let httpResponse = response as? HTTPURLResponse,
+      200 ..< 300 ~= httpResponse.statusCode
+    else {
       throw URLError(.badServerResponse)
     }
 
-    guard 200 ..< 300 ~= httpResponse.statusCode else {
-      throw Error.unaccetableStatusCode(httpResponse.statusCode)
-    }
-
     return httpResponse
-  }
-}
-
-struct Request {
-  let method: String
-  var query: [URLQueryItem] = []
-  var body: Data?
-  var headers: [String: String] = [:]
-}
-
-extension URLSession {
-  func data(for request: Request, withURL url: URL) async throws -> (Data, URLResponse) {
-    var components = URLComponents(url: url, resolvingAgainstBaseURL: false)!
-    if !request.query.isEmpty {
-      components.queryItems = request.query
-    }
-    let url = components.url!
-    var urlRequest = URLRequest(url: url)
-    urlRequest.httpBody = request.body
-    urlRequest.httpMethod = request.method
-    request.headers.forEach {
-      urlRequest.setValue($0.value, forHTTPHeaderField: $0.key)
-    }
-    return try await data(for: urlRequest)
   }
 }

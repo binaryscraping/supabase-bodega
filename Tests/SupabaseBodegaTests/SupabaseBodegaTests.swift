@@ -6,8 +6,11 @@ final class SupabaseStorageEngineTests: XCTestCase {
   private var storage: SupabaseStorageEngine!
 
   override func setUp() async throws {
-    storage = SupabaseStorageEngine(table: "tests")
-
+    storage = SupabaseStorageEngine(
+      url: URL(string: "http://localhost:54321")!,
+      apiKey: "apikey",
+      table: "tests"
+    )
     try await storage.removeAllData()
   }
 
