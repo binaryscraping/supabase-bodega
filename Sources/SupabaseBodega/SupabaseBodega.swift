@@ -261,7 +261,7 @@ public actor SupabaseStorageEngine: StorageEngine {
     do {
       let (_, response) = try await send(request)
       guard let contentRange = response.value(forHTTPHeaderField: "Content-Range") else {
-        logger.error("Missing 'Content-Range' headers from response.")
+        logger.error("Missing 'Content-Range' header from response.")
         throw URLError(.badServerResponse)
       }
 
@@ -290,7 +290,7 @@ public actor SupabaseStorageEngine: StorageEngine {
     do {
       let (_, response) = try await send(request)
       guard let contentRange = response.value(forHTTPHeaderField: "Content-Range") else {
-        logger.error("Missing 'Content-Range' headers from response.")
+        logger.error("Missing 'Content-Range' header from response.")
         throw URLError(.badServerResponse)
       }
 
