@@ -94,12 +94,11 @@ public actor SupabaseStorageEngine: StorageEngine {
     )
 
     do {
-      let (data, _) = try await send(request)
       struct Container: Decodable {
         let data: Data
       }
-      let container = try decoder.decode([Container].self, from: data)
-      return container.first?.data
+      let (values, _) = try await send(request, as: [Container].self)
+      return values.first?.data
     } catch {
       logger.error("Error reading data for key '\(key.value)', error: \(String(describing: error))")
       return nil
@@ -116,12 +115,11 @@ public actor SupabaseStorageEngine: StorageEngine {
     )
 
     do {
-      let (data, _) = try await send(request)
       struct Container: Decodable {
         let data: Data
       }
-      let container = try decoder.decode([Container].self, from: data)
-      return container.map(\.data)
+      let (values, _) = try await send(request, as: [Container].self)
+      return values.map(\.data)
     } catch {
       logger
         .error(
@@ -143,9 +141,7 @@ public actor SupabaseStorageEngine: StorageEngine {
     )
 
     do {
-      let (data, _) = try await send(request)
-      let values = try decoder.decode([StoredValue].self, from: data)
-
+      let (values, _) = try await send(request, as: [StoredValue].self)
       return values.map {
         (CacheKey(verbatim: $0.key), $0.data)
       }
@@ -166,12 +162,11 @@ public actor SupabaseStorageEngine: StorageEngine {
       ]
     )
     do {
-      let (data, _) = try await send(request)
       struct Container: Decodable {
         let data: Data
       }
-      let container = try decoder.decode([Container].self, from: data)
-      return container.map(\.data)
+      let (values, _) = try await send(request, as: [Container].self)
+      return values.map(\.data)
     } catch {
       logger.error("Error reading all data, error: \(String(describing: error))")
       return []
@@ -187,9 +182,7 @@ public actor SupabaseStorageEngine: StorageEngine {
     )
 
     do {
-      let (data, _) = try await send(request)
-      let values = try decoder.decode([StoredValue].self, from: data)
-
+      let (values, _) = try await send(request, as: [StoredValue].self)
       return values.map {
         (CacheKey(verbatim: $0.key), $0.data)
       }
@@ -315,14 +308,10 @@ public actor SupabaseStorageEngine: StorageEngine {
       ]
     )
     do {
-      let (data, _) = try await send(request)
-
       struct KeyResponse: Decodable {
         let key: String
       }
-
-      let keys = try decoder.decode([KeyResponse].self, from: data)
-
+      let (keys, _) = try await send(request, as: [KeyResponse].self)
       return keys.map { CacheKey(verbatim: $0.key) }
     } catch {
       logger.error("Error fetching all keys, error: \(String(describing: error))")
@@ -340,11 +329,10 @@ public actor SupabaseStorageEngine: StorageEngine {
     )
 
     do {
-      let (data, _) = try await send(request)
       struct Container: Decodable {
         let createdAt: Date
       }
-      let values = try decoder.decode([Container].self, from: data)
+      let (values, _) = try await send(request, as: [Container].self)
       return values.first?.createdAt
     } catch {
       logger
@@ -365,11 +353,11 @@ public actor SupabaseStorageEngine: StorageEngine {
     )
 
     do {
-      let (data, _) = try await send(request)
       struct Container: Decodable {
         let updatedAt: Date
       }
-      let values = try decoder.decode([Container].self, from: data)
+
+      let (values, _) = try await send(request, as: [Container].self)
       return values.first?.updatedAt
     } catch {
       logger
@@ -385,6 +373,15 @@ public actor SupabaseStorageEngine: StorageEngine {
     let (data, response) = try await session.data(for: request, withURL: url)
     let httpResponse = try validate(response)
     return (data, httpResponse)
+  }
+
+  private func send<T: Decodable>(
+    _ request: Request,
+    as _: T.Type
+  ) async throws -> (T, HTTPURLResponse) {
+    let (data, response) = try await send(request)
+    let decodedValue = try decoder.decode(T.self, from: data)
+    return (decodedValue, response)
   }
 
   private func validate(_ response: URLResponse) throws -> HTTPURLResponse {
